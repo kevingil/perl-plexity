@@ -6,8 +6,16 @@ To get started, install cpan dependencies.
 
 
 ```bash
-# HTTP micro-framework and mysql drivers
-sudo cpan Mojolicious DBD::SQLite JSON
+#Update Perl if you haven't used it in a while
+sudo apt-get update
+sudo apt-get install build-essential
+sudo CPAN 
+>install CPAN
+>reload cpan
+
+# Install dependencies
+# HTTP micro-framework, mysql drivers, etc
+sudo cpan Mojolicious DBD::SQLite JSON LWP::UserAgent Env
 ```
 
 Then run :)
