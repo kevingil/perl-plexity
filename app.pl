@@ -76,6 +76,10 @@ SQL
 
 # Main HTML layout
 sub layout {
+  my ($request_partial) = @_;
+  
+  return '<%== $component %>' if $request_partial;
+
   return <<'HTML';
   <!DOCTYPE html>
   <html lang="en">
@@ -159,8 +163,8 @@ sub homepage {
 get '/search' => sub {
     my $c = shift;
     my $user_query = $c->param('user_query');
+    my $request_partial = $c->req->headers->header('HX-Request') ? 1 : 0;
 
-    print $user_query;
 
     my $sth = $dbh->prepare('INSERT INTO search_threads (starting_query) VALUES (?)');
     $sth->execute($user_query);
@@ -175,7 +179,7 @@ get '/search' => sub {
     $html .= '</div></div>';
 
     $c->render(
-        inline => layout(),
+        inline => layout($request_partial),
         component => $html,
         format  => 'html'
     );
