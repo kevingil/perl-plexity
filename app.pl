@@ -38,7 +38,8 @@ $dbh->do(<<'SQL');
 -- Search threads table
 CREATE TABLE IF NOT EXISTS search_threads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    starting_query TEXT NOT NULL
 );
 
 -- Store user queries
@@ -129,9 +130,9 @@ sub homepage {
       <p class="text-2xl text-left mx-4 my-10 font-light">Talk to the internet</p>
       ';
 
-    $html .= '<form hx-post="/search" hx-target="#content" hx-swap="innerHTML"
+    $html .= '<form hx-get="/search" hx-target="#content" hx-swap="innerHTML"
                 class="p-2 flex gap-2 mb-4 relative" method="post">
-                <textarea type="text" name="query" placeholder="Find answers..." class="bg-zinc-700 w-full p-2 pb-10 border-2 border-zinc-400 rounded" required></textarea>
+                <textarea type="text" name="user_query" placeholder="Find answers..." class="bg-zinc-700 w-full p-2 pb-10 border-2 border-zinc-400 rounded" required></textarea>
                 <button type="submit" class="absolute bottom-0 right-0 mb-4 mr-4  rounded border p-1 px-2 hover:bg-black/10">
                   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
@@ -142,10 +143,10 @@ sub homepage {
     $html .= '<ul class="mx-2">';
     foreach my $search (@$searches) {
         $html .= sprintf('<li><div class="rounded hover:bg-zinc-700 bg-zinc-800 border-zinc-600 border p-2 mb-4 flex gap-2"
-                  hx-get="/thread/%d" hx-target="#content" hx-swap="innerHTML">',
+                  hx-get="/search/%d" hx-target="#content" hx-swap="innerHTML">',
             $search->{id});
-        $html .= sprintf('<span class="w-full">%s</span>', $search->{query});
-        $html .= sprintf('<button hx-post="/delete/%d" hx-target="#content" hx-swap="innerHTML" class="hover:bg-zinc-800 text-zinc-600 border-zinc-600 pb-1 px-3 rounded border">x</button>',
+        $html .= sprintf('<span class="w-full">%s</span>', $search->{starting_query});
+        $html .= sprintf('<button hx-post="/search/delete/%d" hx-target="#content" hx-swap="innerHTML" class="hover:bg-zinc-800 text-zinc-600 border-zinc-600 pb-1 px-3 rounded border">x</button>',
             $search->{id});
         $html .= '</div></li>';
     }
@@ -158,62 +159,49 @@ sub homepage {
 get '/search' => sub {
     my $c = shift;
     my $user_query = $c->param('user_query');
-    my $api_response = $c->param('api_response');
-    my $chat_history = $c->param('chat_history');
 
-    my $res = request_completion($user_query, $api_response, $chat_history);
+    print $user_query;
 
-    # Check if the response is successful
-    if ($res->is_success) {
-        # Set the appropriate headers for SSE
-        $c->res->headers->content_type('text/event-stream');
-        $c->res->headers->remove('Content-Length');
-        $c->write_chunk("retry: 10000\n\n");
+    my $sth = $dbh->prepare('INSERT INTO search_threads (starting_query) VALUES (?)');
+    $sth->execute($user_query);
+    my $search_id = $dbh->last_insert_id;
 
-        # Stream the response data
-        my $buffer = '';
-        while (my $chunk = $res->read_entity_chunk) {
-            $buffer .= $chunk;
-            while ($buffer =~ /\n/) {
-                my $line = substr($buffer, 0, index($buffer, "\n") + 1, '');
-                send_sse_data($c, $line);
-            }
-        }
-    }
-    else {
-        # Handle error case
-        $c->render(text => 'Error: ' . $res->status_line);
-    }
+    my $created_at = $dbh->selectrow_array('SELECT created_at FROM search_threads WHERE id = ?', undef, $search_id);
 
-  $dbh->do('INSERT INTO search_threads (query, search_result) VALUES (?, ?)', undef, $user_query, $api_response);
-  
-  $c->render(inline => search_thread());
+    my $html = '<div class="p-2 mx-auto max-w-2xl">';
+    $html .= "<h1 data-id=\"$search_id\" data-created-at=\"$created_at\">$user_query</h1>";
+    $html .= '<div class="flex flex-col gap-2">';
+    $html .= '<!-- Follow up messages will be inserted here -->';
+    $html .= '</div></div>';
 
-
+    $c->render(
+        inline => layout(),
+        component => $html,
+        format  => 'html'
+    );
 };
 
 
 
-# Search content thread
-get '/search/:id' => sub { 
-  my $c = shift;
-  my $id = $c->param('id');
-  my $thread = $dbh->selectrow_hashref('SELECT * FROM search_threads WHERE id = ?', undef, $id);
-  my $html = "<div><h2>Search Thread</h2><p>$thread->{query}</p><p>$thread->{search_result}</p></div>";
-  $c->render(inline => $html);
-};
+# See previous serach request handler
+get '/search/:id' => sub {
+    my $c = shift;
 
-sub search_thread {
-  my $html = '<div>Search Thread Content Here</div>';
-  return $html;
-}
+    my $html;
+
+    $c->render(
+        inline => layout(),
+        component => $html,
+        format  => 'html'
+    );
+};
 
 
 # Delete a search thread
-post '/search/:id/delete' => sub {
+post '/search/delete/:id' => sub {
   my $c = shift;
   my $id = $c->param('id');
-  $dbh->do('DELETE FROM search_thread WHERE id = ?', undef, $id);
+  $dbh->do('DELETE FROM search_threads WHERE id = ?', undef, $id);
   # Re-render the list after deleting
   $c->render(inline => homepage());
 };
@@ -280,7 +268,7 @@ sub send_sse_data {
 }
 
 # Groq stream completion request
-#   docs https://console.groq.com/docs/quickstart
+#   docs https://console.groq.com/docs/quickst
 sub request_completion {
     my ($user_query, $api_response, $chat_history) = @_;
 

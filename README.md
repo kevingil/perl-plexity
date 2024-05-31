@@ -1,8 +1,8 @@
-## Perl Single
+## Perl Plexity
 
-Project template to make a single file, single page web app with Perl, HTMX, and Sqlite
+AI powered conversational search.
 
-To get started, install cpan dependencies.
+Uses Groq (LLama3) and Brave Search
 
 
 ```bash
@@ -22,6 +22,8 @@ Then run :)
 
 ```bash
 perl app.pl daemon
+[info] Listening at "http://*:3000"
+Web application available at http://127.0.0.1:3000
 ```
 
 ### Database
