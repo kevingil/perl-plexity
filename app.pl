@@ -42,33 +42,25 @@ CREATE TABLE IF NOT EXISTS search_threads (
     starting_query TEXT NOT NULL
 );
 
--- Store user queries
-CREATE TABLE IF NOT EXISTS user_queries (
+-- Chat content table
+CREATE TABLE IF NOT EXISTS chat_content (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     search_thread_id INTEGER,
-    query TEXT NOT NULL,
+    search_data_id INTEGER,
+    content TEXT NOT NULL,
+    is_completion BOOLEAN NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (search_thread_id) REFERENCES search_threads(id) ON DELETE CASCADE
+    FOREIGN KEY (search_thread_id) REFERENCES search_threads(id) ON DELETE CASCADE,
+    FOREIGN KEY (search_data_id) REFERENCES search_data(id) ON DELETE CASCADE
 );
 
 -- Store search API response
 CREATE TABLE IF NOT EXISTS search_data (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_query_id INTEGER,
+    search_thread_id INTEGER,
     search_response TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_query_id) REFERENCES user_queries(id) ON DELETE CASCADE
-);
-
--- Store ChatGPT search summary
-CREATE TABLE IF NOT EXISTS summaries (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_query_id INTEGER,
-    search_data_id INTEGER,
-    summary TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_query_id) REFERENCES user_queries(id) ON DELETE CASCADE,
-    FOREIGN KEY (search_data_id) REFERENCES search_data(id) ON DELETE CASCADE
+    FOREIGN KEY (search_thread_id) REFERENCES search_threads(id) ON DELETE CASCADE
 );
 
 SQL
@@ -91,9 +83,11 @@ sub layout {
   <body class="bg-zinc-900 text-white transition-all">
       <div>
       <div class="font-normal p-3 pb-4 rounded">
-        <h1 class="max-w-2xl mx-auto text-left text-cyan-500 text-3xl">
-          perl-plexity
-        </h1>  
+        <a href="/">
+            <h1 class="max-w-2xl mx-auto text-left text-cyan-500 text-3xl">
+                perl-plexity
+            </h1>
+        </a>
       </div>
       
       <div id="content">
@@ -134,23 +128,33 @@ sub homepage {
       <p class="text-2xl text-left mx-4 my-10 font-light">Talk to the internet</p>
       ';
 
-    $html .= '<form hx-get="/search" hx-target="#content" hx-swap="innerHTML"
-                class="p-2 flex gap-2 mb-4 relative" method="post">
-                <textarea type="text" name="user_query" placeholder="Find answers..." class="bg-zinc-700 w-full p-2 pb-10 border-2 border-zinc-400 rounded" required></textarea>
-                <button type="submit" class="absolute bottom-0 right-0 mb-4 mr-4  rounded border p-1 px-2 hover:bg-black/10">
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4">
+    $html .= '<form id="query_form" hx-get="/search" hx-target="#content"
+                hx-swap="innerHTML" hx-push-url="true" hx-trigger=""
+            class="p-2 flex gap-2 mb-4 relative" method="post">
+            <textarea type="text" name="user_query" id="user_query" placeholder="Find answers..." class="bg-zinc-700 w-full p-2 pb-10 border-2 border-zinc-400 rounded" required></textarea>
+            <button type="submit" class="absolute bottom-0 right-0 mb-4 mr-4  rounded border p-1 px-2 hover:bg-black/10">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
-                  </svg>
-                </button>
-              </form>';
+                </svg>
+            </button>
+            </form>
+            <script>
+               document.querySelector(\'textarea[name="user_query"]\').addEventListener("keydown", function(event) {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
+                        this.form.requestSubmit();
+                    }
+                });
+            </script>';
 
     $html .= '<ul class="mx-2">';
     foreach my $search (@$searches) {
         $html .= sprintf('<li><div class="rounded hover:bg-zinc-700 bg-zinc-800 border-zinc-600 border p-2 mb-4 flex gap-2"
-                  hx-get="/search/%d" hx-target="#content" hx-swap="innerHTML">',
+                  hx-get="/search/%d" hx-target="#content" hx-swap="innerHTML" hx-push-url="true">',
             $search->{id});
         $html .= sprintf('<span class="w-full">%s</span>', $search->{starting_query});
-        $html .= sprintf('<button hx-post="/search/delete/%d" hx-target="#content" hx-swap="innerHTML" class="hover:bg-zinc-800 text-zinc-600 border-zinc-600 pb-1 px-3 rounded border">x</button>',
+        $html .= sprintf('<button hx-post="/search/delete/%d" hx-target="#content" hx-swap="innerHTML" hx-push-url="/"
+            class="hover:bg-zinc-800 text-zinc-600 border-zinc-600 pb-1 px-3 rounded border">x</button>',
             $search->{id});
         $html .= '</div></li>';
     }
@@ -173,7 +177,41 @@ get '/search' => sub {
     my $created_at = $dbh->selectrow_array('SELECT created_at FROM search_threads WHERE id = ?', undef, $search_id);
 
     my $html = '<div class="p-2 mx-auto max-w-2xl">';
-    $html .= "<h1 data-id=\"$search_id\" data-created-at=\"$created_at\">$user_query</h1>";
+    $html .= "<h1 id=\"query_$search_id\" search_thread_id=\"$search_id\" created-at=\"$created_at\"
+            class=\"text-4xl p-2\">$user_query</h1>";
+    $html .= '<div class="flex flex-col gap-2">';
+    $html .= '<!-- Follow up messages will be inserted here -->';
+    $html .= '</div></div>';
+
+    $c->render(
+        inline => layout($request_partial),
+        component => $html,
+        format  => 'html'
+    );
+};
+
+
+# Get search thread by ID
+get '/search/:id' => sub {
+    my $c = shift;
+    my $search_id = $c->stash('id');
+    my $request_partial = $c->req->headers->header('HX-Request') ? 1 : 0;
+
+
+    my $search_info = $dbh->selectrow_hashref('SELECT * FROM search_threads WHERE id = ?', undef, $search_id);
+
+    if (!$search_info) {
+        $c->response->status(404);
+        $c->response->body('Search info not found');
+        return;
+    }
+
+    my $user_query = $search_info->{starting_query};
+    my $created_at = $search_info->{created_at};
+
+    my $html = '<div class="p-2 mx-auto max-w-2xl">';
+    $html .= "<h1 id=\"query_$search_id\" created-at=\"$created_at\"
+            class=\"text-4xl p-2\">$user_query</h1>";
     $html .= '<div class="flex flex-col gap-2">';
     $html .= '<!-- Follow up messages will be inserted here -->';
     $html .= '</div></div>';
@@ -187,27 +225,18 @@ get '/search' => sub {
 
 
 
-# See previous serach request handler
-get '/search/:id' => sub {
-    my $c = shift;
-
-    my $html;
-
-    $c->render(
-        inline => layout(),
-        component => $html,
-        format  => 'html'
-    );
-};
-
-
 # Delete a search thread
 post '/search/delete/:id' => sub {
-  my $c = shift;
-  my $id = $c->param('id');
-  $dbh->do('DELETE FROM search_threads WHERE id = ?', undef, $id);
-  # Re-render the list after deleting
-  $c->render(inline => homepage());
+    my $c = shift;
+    my $id = $c->param('id');
+    $dbh->do('DELETE FROM search_threads WHERE id = ?', undef, $id);
+    # Re-render the list after deleting
+    $c->render(
+        inline => layout(1),
+        component => homepage(),
+        format  => 'html'
+    );
+  
 };
 
 
@@ -224,6 +253,59 @@ sub new_thread_modal {
   return '<div>New Thread Modal Content Here</div>';
 }
 
+# Render search result, sources, start text completion stream
+get '/search/result' => sub {
+    my $c = shift;
+    my $search_id = $c->param('search_id');
+    my $user_query = $dbh->selectrow_array('SELECT starting_query FROM search_threads WHERE id = ?', undef, $search_id);
+
+    my $api_response = request_web_search($user_query);
+    my $sth = $dbh->prepare('INSERT INTO search_data (search_thread_id, search_response) VALUES (?, ?)');
+    $sth->execute($search_id, encode_json($api_response));
+    my $search_data_id = $dbh->last_insert_id;
+
+    my $html = '<div class="p-2 mx-auto max-w-2xl">';
+    $html .= "<h1 id=\"query_$search_id\" class=\"text-4xl p-2\">$user_query</h1>";
+    $html .= '<div class="flex flex-col gap-2">';
+    $html .= "<div id=\"answer_$search_id\">$api_response->{web}{results}[0]{snippet}</div>";
+    $html .= '<div id="summary"></div>';
+    $html .= '</div></div>';
+
+    $c->render(
+        inline => layout(1),
+        component => $html,
+        format  => 'html'
+    );
+};
+
+# Completion stream to summarize search response
+get '/search/result/summary' => sub {
+    my $c = shift;
+    my $search_id = $c->param('search_id');
+    my $user_query = $dbh->selectrow_array('SELECT starting_query FROM search_threads WHERE id = ?', undef, $search_id);
+    my $search_data = $dbh->selectrow_array('SELECT search_response FROM search_data WHERE search_thread_id = ? ORDER BY created_at DESC LIMIT 1', undef, $search_id);
+    my $api_response = decode_json($search_data);
+
+    my $chat_history = $dbh->selectall_arrayref('SELECT content FROM chat_content WHERE search_thread_id = ? ORDER BY created_at ASC', undef, $search_id);
+
+    my $res = request_completion($user_query, $api_response, $chat_history);
+
+    $c->res->headers->header('Content-Type' => 'text/event-stream');
+    $c->res->headers->header('Cache-Control' => 'no-cache');
+
+    while ($res->is_success) {
+        my $buffer;
+        $res->read($buffer, 1024);
+        my $data = decode_json($buffer);
+        foreach my $choice (@{$data->{choices}}) {
+            if (exists $choice->{delta}->{content}) {
+                send_sse_data($c, $choice->{delta}->{content});
+                my $sth = $dbh->prepare('INSERT INTO chat_content (search_thread_id, search_data_id, content, is_completion) VALUES (?, ?, ?, ?)');
+                $sth->execute($search_id, $search_data->{search_data_id}, $choice->{delta}->{content}, 1);
+            }
+        }
+    }
+};
 
 
 #####################
