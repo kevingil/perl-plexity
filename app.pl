@@ -55,6 +55,16 @@ $dbh->do('CREATE TABLE IF NOT EXISTS search_data (
             FOREIGN KEY (search_thread_id) REFERENCES search_threads(id) ON DELETE CASCADE
 )');
 
+# Load .env
+open my $env_file, '<', '.env' or die "No .env file: $!";
+while (<$env_file>) {
+    chomp;
+    my ($key, $value) = split /=/, $_, 2;
+    $ENV{$key} = $value;
+}
+close $env_file;
+
+
 # Test function
 my $test_result = test_database();
 print "$test_result\n";
@@ -275,9 +285,8 @@ get '/result' => sub {
     my $search_data_id = $dbh->last_insert_id;
 
     my $html = '<div class="p-2 mx-auto max-w-2xl">';
-    $html .= "<h1 id=\"query_$search_id\" class=\"text-4xl p-2\">$user_query</h1>";
     $html .= '<div class="flex flex-col gap-2">';
-    $html .= "<div id=\"answer_$search_id\">$api_response->{web}{results}[0]{snippet}</div>";
+    $html .= "<div id=\"result_$search_id\">" . to_json($api_response). "</div>";
     $html .= '<div id="summary"></div>';
     $html .= '</div></div>';
 
@@ -328,34 +337,37 @@ get '/summary' => sub {
 sub request_web_search {
     my ($query) = @_;
     my $errors;
-    my $api_key = $ENV{'BRAVE_API_KEY'}; 
+    my $api_key = $ENV{'BRAVE_API_KEY'};
     my $base_url = 'https://api.search.brave.com/res/v1/web/search';
-    
-    # Build HTTP request
-    my $ua = LWP::UserAgent->new();
-    $ua->default_header('Accept' => 'application/json');
-    $ua->default_header('Accept-Encoding' => 'gzip');
-    $ua->default_header('X-Subscription-Token' => $api_key);
 
+    # Encode submitted query
+    use URI::Escape;
+    $query = uri_escape($query);
+
+
+    # Build request
     my $url = $base_url . "?q=" . $query;
-    
-    # Send request
-    my $request = HTTP::Request->new(GET => $url);
-    
+    my $headers = ['Accept' => 'application/json',
+                   'Accept-Encoding' => 'gzip',
+                   'X-Subscription-Token' => $api_key];
+    my $request = HTTP::Request->new('GET', $url, $headers);
+
     # Get response
+    my $ua = LWP::UserAgent->new();
     my $response = $ua->request($request);
 
     # Decode JSON
     if ($response->is_success) {
         my $content = $response->decoded_content;
         my $json_data = decode_json($content);
-        return $json_data; 
+        return $json_data;
     } else {
         # Handle errors
         $errors = "Request failed: " . $response->status_line;
         return { errors => $errors };
     }
 }
+
 
 # Helper function to send SSE data
 sub send_sse_data {
