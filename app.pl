@@ -12,12 +12,11 @@ use Env;
 my $db_file = './data/app.db';
 
 # Connection
-my $dbh;
-eval {
-    $dbh = DBI->connect("dbi:SQLite:dbname=$db_file", '', '', { RaiseError => 1, AutoCommit => 1 });
+my $dbh = eval {
+    DBI->connect("dbi:SQLite:dbname=$db_file", '', '', { RaiseError => 1, AutoCommit => 1 });
 };
 
-# Create database if exists
+# Create database if not exists
 if ($@) {
     warn "Building database: $@";
 
@@ -26,44 +25,39 @@ if ($@) {
         mkdir $db_dir or die "Could not create directory $db_dir: $!";
     }
     $dbh = DBI->connect("dbi:SQLite:dbname=$db_file", '', '', { RaiseError => 1, AutoCommit => 1 });
+    die "Failed to create database" unless $dbh;
 
-    if (!$dbh) {
-        die "Failed to create database";
-    }
 }
 
-# Database schema
-$dbh->do(<<'SQL');
+# Create database schema
+$dbh->do('CREATE TABLE IF NOT EXISTS search_threads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            starting_query TEXT NOT NULL
+)');
 
--- Search threads table
-CREATE TABLE IF NOT EXISTS search_threads (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    starting_query TEXT NOT NULL
-);
+$dbh->do('CREATE TABLE IF NOT EXISTS chat_content (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            search_thread_id INTEGER,
+            search_data_id INTEGER,
+            content TEXT NOT NULL,
+            is_completion BOOLEAN NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (search_thread_id) REFERENCES search_threads(id) ON DELETE CASCADE,
+            FOREIGN KEY (search_data_id) REFERENCES search_data(id) ON DELETE CASCADE
+)');
 
--- Chat content table
-CREATE TABLE IF NOT EXISTS chat_content (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    search_thread_id INTEGER,
-    search_data_id INTEGER,
-    content TEXT NOT NULL,
-    is_completion BOOLEAN NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (search_thread_id) REFERENCES search_threads(id) ON DELETE CASCADE,
-    FOREIGN KEY (search_data_id) REFERENCES search_data(id) ON DELETE CASCADE
-);
+$dbh->do('CREATE TABLE IF NOT EXISTS search_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            search_thread_id INTEGER,
+            search_response TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (search_thread_id) REFERENCES search_threads(id) ON DELETE CASCADE
+)');
 
--- Store search API response
-CREATE TABLE IF NOT EXISTS search_data (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    search_thread_id INTEGER,
-    search_response TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (search_thread_id) REFERENCES search_threads(id) ON DELETE CASCADE
-);
-
-SQL
+# Test function
+my $test_result = test_database();
+print "$test_result\n";
 
 
 # Main HTML layout
@@ -117,51 +111,50 @@ get '/' => sub {
   );
 };
 
+
 # Home component
 sub homepage {
-    my $searches;
-    
-    # Fetch tasks from the database
-    $searches = $dbh->selectall_arrayref('SELECT * FROM search_threads LIMIT 10', { Slice => {} });
+    my $searches = $dbh->selectall_arrayref('SELECT * FROM search_threads LIMIT 10', { Slice => {} });
 
-    my $html = '<div class="p-2 mx-auto max-w-2xl">
-      <p class="text-2xl text-left mx-4 my-10 font-light">Talk to the internet</p>
-      ';
-
-    $html .= '<form id="query_form" hx-get="/search" hx-target="#content"
-                hx-swap="innerHTML" hx-push-url="true" hx-trigger=""
-            class="p-2 flex gap-2 mb-4 relative" method="post">
-            <textarea type="text" name="user_query" id="user_query" placeholder="Find answers..." class="bg-zinc-700 w-full p-2 pb-10 border-2 border-zinc-400 rounded" required></textarea>
-            <button type="submit" class="absolute bottom-0 right-0 mb-4 mr-4  rounded border p-1 px-2 hover:bg-black/10">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
-                </svg>
-            </button>
+    my $html = qq{
+        <div class="p-2 mx-auto max-w-2xl">
+            <p class="text-2xl text-left mx-4 my-10 font-light">Talk to the internet</p>
+            <form id="query_form" hx-get="/search" hx-target="#content" hx-swap="innerHTML" hx-push-url="true" hx-trigger="" class="p-2 flex gap-2 mb-4 relative" method="post">
+                <textarea type="text" name="user_query" id="user_query" placeholder="Find answers..." class="bg-zinc-700 w-full p-2 pb-10 border-2 border-zinc-400 rounded" required></textarea>
+                <button type="submit" class="absolute bottom-0 right-0 mb-4 mr-4 rounded border p-1 px-2 hover:bg-black/10">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
+                    </svg>
+                </button>
             </form>
             <script>
-               document.querySelector(\'textarea[name="user_query"]\').addEventListener("keydown", function(event) {
+                document.querySelector('textarea[name="user_query"]').addEventListener("keydown", function(event) {
                     if (event.key === "Enter" && !event.shiftKey) {
                         event.preventDefault();
                         this.form.requestSubmit();
                     }
                 });
-            </script>';
+            </script>
+            <ul class="mx-2">
+    };
 
-    $html .= '<ul class="mx-2">';
     foreach my $search (@$searches) {
-        $html .= sprintf('<li><div class="rounded hover:bg-zinc-700 bg-zinc-800 border-zinc-600 border p-2 mb-4 flex gap-2"
-                  hx-get="/search/%d" hx-target="#content" hx-swap="innerHTML" hx-push-url="true">',
-            $search->{id});
-        $html .= sprintf('<span class="w-full">%s</span>', $search->{starting_query});
-        $html .= sprintf('<button hx-post="/search/delete/%d" hx-target="#content" hx-swap="innerHTML" hx-push-url="/"
-            class="hover:bg-zinc-800 text-zinc-600 border-zinc-600 pb-1 px-3 rounded border">x</button>',
-            $search->{id});
-        $html .= '</div></li>';
+        $html .= qq{
+            <li>
+                <div class="rounded hover:bg-zinc-700 bg-zinc-800 border-zinc-600 border p-2 mb-4 flex gap-2">
+                    <span class="w-full">$search->{starting_query}</span>
+                    <button hx-post="/search/delete/$search->{id}" hx-target="#content" hx-swap="innerHTML" hx-push-url="/"
+                    onclick="event.stopPropagation();" class="hover:bg-zinc-800 text-zinc-600 border-zinc-600 pb-1 px-3 rounded border">x</button>
+                </div>
+            </li>
+        };
     }
+
     $html .= '</ul> </div>';
 
     return $html;
 }
+
 
 # Search request handler
 get '/search' => sub {
@@ -169,19 +162,49 @@ get '/search' => sub {
     my $user_query = $c->param('user_query');
     my $request_partial = $c->req->headers->header('HX-Request') ? 1 : 0;
 
-
     my $sth = $dbh->prepare('INSERT INTO search_threads (starting_query) VALUES (?)');
     $sth->execute($user_query);
     my $search_id = $dbh->last_insert_id;
 
     my $created_at = $dbh->selectrow_array('SELECT created_at FROM search_threads WHERE id = ?', undef, $search_id);
 
-    my $html = '<div class="p-2 mx-auto max-w-2xl">';
-    $html .= "<h1 id=\"query_$search_id\" search_thread_id=\"$search_id\" created-at=\"$created_at\"
-            class=\"text-4xl p-2\">$user_query</h1>";
-    $html .= '<div class="flex flex-col gap-2">';
-    $html .= '<!-- Follow up messages will be inserted here -->';
-    $html .= '</div></div>';
+    my $html = <<"HTML";
+    <div class="p-2 mx-auto max-w-2xl">
+        <h1 id="query_$search_id" search_thread_id="$search_id" created-at="$created_at" class="text-4xl p-2">$user_query</h1>
+        <div class="flex flex-col gap-2 mt-6">
+            <div class="shadow rounded-md p-2 w-full mx-auto">
+                <div hx-get="/result?search_id=$search_id" hx-target="this" hx-swap="innerHTML" hx-trigger="load" class="flex gap-4 flex-row mb-8">
+                    <div class="rounded bg-slate-700 h-20 w-[25%]"></div>
+                    <div class="rounded bg-slate-700 h-20 w-[25%]"></div>
+                    <div class="rounded bg-slate-700 h-20 w-[25%]"></div>
+                    <div class="rounded bg-slate-700 h-20 w-[25%]"></div>
+                </div>
+                <div x-get="/completion?search_id=$search_id" hx-target="this" hx-swap="innerHTML" hx-trigger=" " class="animate-pulse flex flex-col">
+                    <div class="flex-1 mt-2 py-1">
+                        <div class="h-2 bg-slate-700 rounded"></div>
+                        <div class="mt-4">
+                            <div class="grid grid-cols-6 gap-4 mt-4">
+                                <div class="h-2 bg-slate-700 rounded col-span-2"></div>
+                                <div class="h-2 bg-slate-700 rounded col-span-4"></div>
+                            </div>
+                            <div class="h-2 bg-slate-700 rounded mt-4"></div>
+                        </div>
+                    </div>
+                    <div class="flex-1 mt-2 py-1">
+                        <div class="h-2 bg-slate-700 rounded"></div>
+                        <div class="mt-4">
+                            <div class="grid grid-cols-3 gap-4 mt-4">
+                                <div class="h-2 bg-slate-700 rounded col-span-2"></div>
+                                <div class="h-2 bg-slate-700 rounded col-span-1"></div>
+                            </div>
+                            <div class="h-2 bg-slate-700 rounded mt-4"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+HTML
 
     $c->render(
         inline => layout($request_partial),
@@ -190,13 +213,11 @@ get '/search' => sub {
     );
 };
 
-
 # Get search thread by ID
 get '/search/:id' => sub {
     my $c = shift;
     my $search_id = $c->stash('id');
     my $request_partial = $c->req->headers->header('HX-Request') ? 1 : 0;
-
 
     my $search_info = $dbh->selectrow_hashref('SELECT * FROM search_threads WHERE id = ?', undef, $search_id);
 
@@ -209,12 +230,14 @@ get '/search/:id' => sub {
     my $user_query = $search_info->{starting_query};
     my $created_at = $search_info->{created_at};
 
-    my $html = '<div class="p-2 mx-auto max-w-2xl">';
-    $html .= "<h1 id=\"query_$search_id\" created-at=\"$created_at\"
-            class=\"text-4xl p-2\">$user_query</h1>";
-    $html .= '<div class="flex flex-col gap-2">';
-    $html .= '<!-- Follow up messages will be inserted here -->';
-    $html .= '</div></div>';
+    my $html = <<"HTML";
+    <div class="p-2 mx-auto max-w-2xl">
+        <h1 id="query_$search_id" created-at="$created_at" class="text-4xl p-2">$user_query</h1>
+        <div class="flex flex-col gap-2">
+            <!-- Follow up messages will be inserted here -->
+        </div>
+    </div>
+HTML
 
     $c->render(
         inline => layout($request_partial),
@@ -240,21 +263,8 @@ post '/search/delete/:id' => sub {
 };
 
 
-# Renders search modal
-get '/search/new' => sub {
-  my $c = shift;
-  $c->render(inline => new_thread_modal());
-};
-
-#Global modal to start a new chat thread
-# can be used from anywhere in the app
-#  on submit, redirects to /search/:id
-sub new_thread_modal {
-  return '<div>New Thread Modal Content Here</div>';
-}
-
 # Render search result, sources, start text completion stream
-get '/search/result' => sub {
+get '/result' => sub {
     my $c = shift;
     my $search_id = $c->param('search_id');
     my $user_query = $dbh->selectrow_array('SELECT starting_query FROM search_threads WHERE id = ?', undef, $search_id);
@@ -279,7 +289,7 @@ get '/search/result' => sub {
 };
 
 # Completion stream to summarize search response
-get '/search/result/summary' => sub {
+get '/summary' => sub {
     my $c = shift;
     my $search_id = $c->param('search_id');
     my $user_query = $dbh->selectrow_array('SELECT starting_query FROM search_threads WHERE id = ?', undef, $search_id);
@@ -391,6 +401,39 @@ sub request_completion {
     my $res = $ua->request($req);
 
     return $res;
+}
+
+
+########
+# TEST #
+########
+
+# Test database 
+sub test_database {
+    # Create a new search thread
+    my $sth = $dbh->prepare('INSERT INTO search_threads (starting_query) VALUES (?)');
+    $sth->execute('Test query');
+    my $search_id = $dbh->last_insert_id;
+    return 'Error creating search thread' unless $search_id;
+
+    # Insert data into the search_data table
+    $sth = $dbh->prepare('INSERT INTO search_data (search_thread_id, search_response) VALUES (?, ?)');
+    $sth->execute($search_id, 'Test search response');
+    my $search_data_id = $dbh->last_insert_id;
+    return 'Error inserting search data' unless $search_data_id;
+
+    # Insert chat content
+    $sth = $dbh->prepare('INSERT INTO chat_content (search_thread_id, search_data_id, content, is_completion) VALUES (?, ?, ?, ?)');
+    $sth->execute($search_id, $search_data_id, 'Test chat content', 1);
+    my $chat_content_id = $dbh->last_insert_id;
+    return 'Error inserting chat content' unless $chat_content_id;
+
+    # Delete the search thread to clean up
+    $dbh->do('DELETE FROM search_threads WHERE id = ?', undef, $search_id);
+    my $deleted_rows = $dbh->rows;
+    return 'Error deleting search thread' unless $deleted_rows;
+
+    return 'All tests passed';
 }
 
 
