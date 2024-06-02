@@ -286,8 +286,21 @@ get '/result' => sub {
 
     my $html = '<div class="p-2 mx-auto max-w-2xl">';
     $html .= '<div class="flex flex-col gap-2">';
-    $html .= "<div id=\"result_$search_id\">" . to_json($api_response). "</div>";
-    $html .= '<div id="summary"></div>';
+    $html .= "<div id=\"result_$search_id\">";
+    $html .= "<h2 class='mb-2 bold'>Sources</h2>";
+    $html .= '<div class="flex flex-row text-sm gap-2">';
+    for my $result (@{$api_response->{web}->{results}}[0..2]) {
+        $html .= '<div class="flex flex-col bg-zinc-500 p-2 rounded w-[25%]">';  
+        $html .= "<a href=\"$result->{url}\" class='bold underline mb-1'>$result->{title}</a>
+                    <p class='text-xs max-h-12 overflow-hidden'>$result->{description}</p>";
+        $html .= "</div>";
+    }
+    $html .= '<div class="flex flex-col bg-zinc-500 p-2 rounded w-[25%]">';  
+    $html .= "<a class='bold underline mb-1'>More sources</a>
+                <p class='text-xs max-h-12 overflow-hidden'>Sources</p>";
+    $html .= "</div>";
+    $html .= "</div>";
+    $html .= "</div>";
     $html .= '</div></div>';
 
     $c->render(
@@ -346,7 +359,10 @@ sub request_web_search {
 
 
     # Build request
-    my $url = $base_url . "?q=" . $query;
+    my $url = $base_url . "?count=5&
+                            extra_snippets=true&
+                            result_filter=discussions,faq,infobox,news,query,web
+                            &q=" . $query;
     my $headers = ['Accept' => 'application/json',
                    'Accept-Encoding' => 'gzip',
                    'X-Subscription-Token' => $api_key];
@@ -355,16 +371,52 @@ sub request_web_search {
     # Get response
     my $ua = LWP::UserAgent->new();
     my $response = $ua->request($request);
+    my $data = decode_json($response->decoded_content);
 
     # Decode JSON
     if ($response->is_success) {
-        my $content = $response->decoded_content;
-        my $json_data = decode_json($content);
-        return $json_data;
+=for comment
+        # Crawl content and add it to result 
+        my @top_results = @{$data->{web}->{results}}[0..2]; 
+        foreach my $result (@top_results) {
+            my $crawled_content = scrape_content($result->{url});
+            $result->{crawled_content} = $crawled_content;
+        } 
+=cut
+        return $data;
     } else {
         # Handle errors
         $errors = "Request failed: " . $response->status_line;
         return { errors => $errors };
+    }
+}
+
+# Scrape content from any URL
+sub scrape_content {
+    my ($url) = @_;
+    my $ua = LWP::UserAgent->new();
+    my $response = $ua->get($url);
+
+    if ($response->is_success) {
+        my $content = $response->decoded_content;
+
+        # Extract content between <body> tags
+        if ($content =~ m|<body.*?>(.*?)</body>|is) {
+            my $body_text = $1;
+
+            # Remove <script> and <nav> tags and their content
+            $body_text =~ s|<script.*?>.*?</script>||gis;
+            $body_text =~ s|<nav.*?>.*?</nav>||gis;
+
+            # Remove remaining HTML tags
+            $body_text =~ s|<.*?>||g;
+
+            return $body_text;
+        } else {
+            return "No article content.";
+        }
+    } else {
+        return "No content available: " . $response->status_line;
     }
 }
 
