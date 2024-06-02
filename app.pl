@@ -1,7 +1,8 @@
 use strict;
 use warnings;
-use LWP::UserAgent;
 use HTTP::Request;
+use LWP::UserAgent;
+use LWP::Protocol::https;
 use Mojolicious::Lite;
 use JSON;
 use DBI;
@@ -180,16 +181,16 @@ get '/search' => sub {
 
     my $html = <<"HTML";
     <div class="p-2 mx-auto max-w-2xl">
-        <h1 id="query_$search_id" search_thread_id="$search_id" created-at="$created_at" class="text-4xl p-2">$user_query</h1>
+        <h1 id="queryid-$search_id" search_thread_id="$search_id" created-at="$created_at" class="text-4xl p-2">$user_query</h1>
         <div class="flex flex-col gap-2 mt-6">
-            <div class="shadow rounded-md p-2 w-full mx-auto">
-                <div hx-get="/result?search_id=$search_id" hx-target="this" hx-swap="innerHTML" hx-trigger="load" class="flex gap-4 flex-row mb-8">
+            <div hx-get="/result?search_id=$search_id" hx-target="this" hx-swap="innerHTML" hx-trigger="load" class="rounded-md p-2 w-full mx-auto">
+                <div class="flex gap-4 flex-row mb-8">
                     <div class="rounded bg-slate-700 h-20 w-[25%]"></div>
                     <div class="rounded bg-slate-700 h-20 w-[25%]"></div>
                     <div class="rounded bg-slate-700 h-20 w-[25%]"></div>
                     <div class="rounded bg-slate-700 h-20 w-[25%]"></div>
                 </div>
-                <div x-get="/completion?search_id=$search_id" hx-target="this" hx-swap="innerHTML" hx-trigger=" " class="animate-pulse flex flex-col">
+                <div class="animate-pulse flex flex-col">
                     <div class="flex-1 mt-2 py-1">
                         <div class="h-2 bg-slate-700 rounded"></div>
                         <div class="mt-4">
@@ -281,27 +282,57 @@ get '/result' => sub {
 
     my $api_response = request_web_search($user_query);
     my $sth = $dbh->prepare('INSERT INTO search_data (search_thread_id, search_response) VALUES (?, ?)');
-    $sth->execute($search_id, encode_json($api_response));
-    my $search_data_id = $dbh->last_insert_id;
+    my $insert_sucess = $sth->execute($search_id, encode_json($api_response));
+    if (!$insert_sucess) {
+        warn "Failed to insert search data: " . $dbh->errstr;
+    }
 
     my $html = '<div class="p-2 mx-auto max-w-2xl">';
-    $html .= '<div class="flex flex-col gap-2">';
-    $html .= "<div id=\"result_$search_id\">";
-    $html .= "<h2 class='mb-2 bold'>Sources</h2>";
-    $html .= '<div class="flex flex-row text-sm gap-2">';
+    $html .= '    <div class="flex flex-col gap-6">';
+    $html .= "        <div id=\"result_$search_id\">";
+    $html .= "            <h2 class='mb-2 bold'>Sources</h2>";
+    $html .= '            <div class="flex flex-row text-sm gap-2">';
+
     for my $result (@{$api_response->{web}->{results}}[0..2]) {
-        $html .= '<div class="flex flex-col bg-zinc-500 p-2 rounded w-[25%]">';  
-        $html .= "<a href=\"$result->{url}\" class='bold underline mb-1'>$result->{title}</a>
-                    <p class='text-xs max-h-12 overflow-hidden'>$result->{description}</p>";
-        $html .= "</div>";
+        $html .= '                <div class="flex flex-col bg-zinc-700 p-2 rounded w-[25%]">';
+        $html .= "                    <a href=\"$result->{url}\" class='bold underline mb-1'>$result->{title}</a>";
+        $html .= "                    <p class='text-xs max-h-12 overflow-hidden'>$result->{description}</p>";
+        $html .= '                </div>';
     }
-    $html .= '<div class="flex flex-col bg-zinc-500 p-2 rounded w-[25%]">';  
-    $html .= "<a class='bold underline mb-1'>More sources</a>
-                <p class='text-xs max-h-12 overflow-hidden'>Sources</p>";
-    $html .= "</div>";
-    $html .= "</div>";
-    $html .= "</div>";
-    $html .= '</div></div>';
+
+    $html .= '                <div class="flex flex-col bg-zinc-700 p-2 rounded w-[25%]">';
+    $html .= "                    <a class='bold underline mb-1'>More sources</a>";
+    $html .= "                    <p class='text-xs max-h-12 overflow-hidden'>Sources</p>";
+    $html .= '                </div>';
+    $html .= '            </div>';
+    $html .= '        </div>';
+    $html .= "        <div hx-sse=\"connect:/completion?search_id=$search_id swap:message\" hx-target=\"this\" hx-trigger=\"load\">";
+    $html .= '            <div class="animate-pulse flex flex-col">';
+    $html .= '                <div class="flex-1 mt-2 py-1">';
+    $html .= '                    <div class="h-2 bg-slate-700 rounded"></div>';
+    $html .= '                    <div class="mt-4">';
+    $html .= '                        <div class="grid grid-cols-6 gap-4 mt-4">';
+    $html .= '                            <div class="h-2 bg-slate-700 rounded col-span-2"></div>';
+    $html .= '                            <div class="h-2 bg-slate-700 rounded col-span-4"></div>';
+    $html .= '                        </div>';
+    $html .= '                        <div class="h-2 bg-slate-700 rounded mt-4"></div>';
+    $html .= '                    </div>';
+    $html .= '                </div>';
+    $html .= '                <div class="flex-1 mt-2 py-1">';
+    $html .= '                    <div class="h-2 bg-slate-700 rounded"></div>';
+    $html .= '                    <div class="mt-4">';
+    $html .= '                        <div class="grid grid-cols-3 gap-4 mt-4">';
+    $html .= '                            <div class="h-2 bg-slate-700 rounded col-span-2"></div>';
+    $html .= '                            <div class="h-2 bg-slate-700 rounded col-span-1"></div>';
+    $html .= '                        </div>';
+    $html .= '                        <div class="h-2 bg-slate-700 rounded mt-4"></div>';
+    $html .= '                    </div>';
+    $html .= '                </div>';
+    $html .= '            </div>';
+    $html .= '        </div>';
+    $html .= '    </div>';
+    $html .= '  </div>';
+
 
     $c->render(
         inline => layout(1),
@@ -311,7 +342,7 @@ get '/result' => sub {
 };
 
 # Completion stream to summarize search response
-get '/summary' => sub {
+get '/completion' => sub {
     my $c = shift;
     my $search_id = $c->param('search_id');
     my $user_query = $dbh->selectrow_array('SELECT starting_query FROM search_threads WHERE id = ?', undef, $search_id);
@@ -324,6 +355,11 @@ get '/summary' => sub {
 
     $c->res->headers->header('Content-Type' => 'text/event-stream');
     $c->res->headers->header('Cache-Control' => 'no-cache');
+
+    if ($res->{errors}) {
+        send_sse_data($c, "<p class='text-xl'>Error: " . $res->{errors} . '</p>');
+        return;
+    }
 
     while ($res->is_success) {
         my $buffer;
@@ -352,6 +388,7 @@ sub request_web_search {
     my $errors;
     my $api_key = $ENV{'BRAVE_API_KEY'};
     my $base_url = 'https://api.search.brave.com/res/v1/web/search';
+    my $params = "?count=5&extra_snippets=true&result_filter=discussions,faq,infobox,news,query,web&q=";
 
     # Encode submitted query
     use URI::Escape;
@@ -359,10 +396,7 @@ sub request_web_search {
 
 
     # Build request
-    my $url = $base_url . "?count=5&
-                            extra_snippets=true&
-                            result_filter=discussions,faq,infobox,news,query,web
-                            &q=" . $query;
+    my $url = $base_url . $params . $query;
     my $headers = ['Accept' => 'application/json',
                    'Accept-Encoding' => 'gzip',
                    'X-Subscription-Token' => $api_key];
@@ -371,20 +405,18 @@ sub request_web_search {
     # Get response
     my $ua = LWP::UserAgent->new();
     my $response = $ua->request($request);
-    my $data = decode_json($response->decoded_content);
 
     # Decode JSON
     if ($response->is_success) {
-=for comment
-        # Crawl content and add it to result 
-        my @top_results = @{$data->{web}->{results}}[0..2]; 
-        foreach my $result (@top_results) {
-            my $crawled_content = scrape_content($result->{url});
-            $result->{crawled_content} = $crawled_content;
-        } 
-=cut
-        return $data;
-    } else {
+        my $content = $response->decoded_content;
+        if (defined $content) {
+            my $data = decode_json($content);
+            return $data;
+        } else {
+            $errors = "Error parsing JSON";
+            return { errors => $errors };
+        }
+    }else {
         # Handle errors
         $errors = "Request failed: " . $response->status_line;
         return { errors => $errors };
@@ -404,11 +436,9 @@ sub scrape_content {
         if ($content =~ m|<body.*?>(.*?)</body>|is) {
             my $body_text = $1;
 
-            # Remove <script> and <nav> tags and their content
+            # Remove extra tags and their content
             $body_text =~ s|<script.*?>.*?</script>||gis;
             $body_text =~ s|<nav.*?>.*?</nav>||gis;
-
-            # Remove remaining HTML tags
             $body_text =~ s|<.*?>||g;
 
             return $body_text;
@@ -428,14 +458,16 @@ sub send_sse_data {
 }
 
 # Groq stream completion request
-#   docs https://console.groq.com/docs/quickst
+# https://console.groq.com/docs/quickst
 sub request_completion {
     my ($user_query, $api_response, $chat_history) = @_;
+    my $errors;
 
     # Set up the user agent and request
     my $ua = LWP::UserAgent->new();
     my $req = HTTP::Request->new('POST', 'https://api.groq.com/openai/v1/chat/completions');
     $req->header('Content-Type' => 'application/json');
+    $req->header('Authorization' => 'Bearer ' . $ENV{'GROQ_API_KEY'});
 
     # Prepare the payload
     my $payload = {
@@ -443,8 +475,8 @@ sub request_completion {
             {
                 'role' => 'system',
                 'content' => "You are the internet speaking in natural language,
-                            using the search API response data, answer the user question.
-                            Chat history is also provided for context. {$api_response} {$chat_history}"
+                            using the search API response data, answer the user question:
+                            {$api_response}"
             },
             {
                 'role' => 'user',
@@ -464,7 +496,14 @@ sub request_completion {
     # Send request and handle response
     my $res = $ua->request($req);
 
-    return $res;
+    if ($res->is_success) {
+        return $res;
+    } else {
+        $errors = $res->status_line;
+        # Handle the error appropriately, for example:
+        print STDERR "HTTP request failed: $errors\n";
+        return { errors => $errors };
+    }
 }
 
 

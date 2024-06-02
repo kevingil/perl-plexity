@@ -9,10 +9,12 @@ Uses Groq (LLama3) and Brave Search
 #Update Perl if you haven't used it in a while
 sudo apt-get update
 sudo apt-get install build-essential
+sudo apt-get install libssl-dev
+sudo apt-get install zlib1g-dev
 sudo CPAN -f
 
 # Install dependencies
-sudo cpan Mojolicious DBD::SQLite JSON LWP::UserAgent Env
+sudo cpan Mojolicious DBD::SQLite JSON LWP::UserAgent LWP::Protocol::https Env
 ```
 
 Then run :)
