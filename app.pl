@@ -45,6 +45,7 @@ $dbh->do('CREATE TABLE IF NOT EXISTS chat_content (
             search_thread_id INTEGER,
             search_data_id INTEGER,
             content TEXT NOT NULL,
+            user TEXT,
             is_completion BOOLEAN NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (search_thread_id) REFERENCES search_threads(id) ON DELETE CASCADE,
@@ -148,7 +149,7 @@ sub layout {
       <div class="">
       <div class="font-normal p-3 pb-4 rounded">
         <a hx-get="/" hx-target="#content" hx-swap="innerHTML transition:true" hx-push-url="true">
-            <h1 class="max-w-2xl mx-auto text-left text-cyan-500 text-3xl pointer-cursor">
+            <h1 class="max-w-2xl mx-auto text-left text-cyan-500 text-3xl cursor-pointer">
                 perl-plexity
             </h1>
         </a>
@@ -213,7 +214,7 @@ sub homepage {
     foreach my $search ( reverse @$searches) {
         $html .= qq{
             <li>
-                <div hx-post="/search/$search->{id}" hx-target="#content" hx-swap="innerHTML transition:true" hx-push-url="true" 
+                <div hx-get="/search/$search->{id}" hx-target="#content" hx-swap="innerHTML transition:true" hx-push-url="true" 
                     class="rounded hover:bg-zinc-700 bg-zinc-800 border-zinc-600 border p-2 mb-4 flex gap-2">
                     <span class="w-full">$search->{starting_query}</span>
                     <button hx-post="/search/delete/$search->{id}" hx-target="#content" hx-swap="innerHTML" hx-push-url="/"
@@ -229,7 +230,7 @@ sub homepage {
 }
 
 
-# Search request handler
+# New search thread request handler
 get '/search' => sub {
     my $c = shift;
     my $user_query = $c->param('user_query');
@@ -286,7 +287,22 @@ HTML
     );
 };
 
-# Get search thread by ID
+
+# Delete a search thread
+post '/search/delete/:id' => sub {
+    my $c = shift;
+    my $id = $c->param('id');
+    $dbh->do('DELETE FROM search_threads WHERE id = ?', undef, $id);
+    # Re-render the list after deleting
+    $c->render(
+        inline => layout(1),
+        component => homepage(),
+        format  => 'html'
+    );
+  
+};
+
+#Get existing search thread
 get '/search/:id' => sub {
     my $c = shift;
     my $search_id = $c->stash('id');
@@ -303,14 +319,46 @@ get '/search/:id' => sub {
     my $user_query = $search_info->{starting_query};
     my $created_at = $search_info->{created_at};
 
-    my $html = <<"HTML";
-    <div class="p-2 mx-auto max-w-2xl">
-        <h1 id="query_$search_id" created-at="$created_at" class="text-4xl p-2">$user_query</h1>
-        <div class="flex flex-col gap-2">
-            <!-- Follow up messages will be inserted here -->
-        </div>
-    </div>
-HTML
+    # Fetch search data from the database
+    my $search_data = $dbh->selectrow_hashref('SELECT * FROM search_data WHERE search_thread_id = ? ORDER BY created_at DESC LIMIT 1', undef, $search_id);
+
+    if (!$search_data) {
+        $c->response->status(404);
+        $c->response->body('Search data not found');
+        return;
+    }
+
+    my $search_response = decode_json($search_data->{search_response});
+
+    my $html = '<div class="p-2 mx-auto max-w-2xl slide-content">';
+    $html .= "<h1 id=\"query_$search_id\" created-at=\"$created_at\" class=\"text-4xl p-2\">$user_query</h1>";
+    $html .= '<div class="flex flex-col gap-2">';
+
+    # Display search results
+    $html .= '<div class="flex flex-row text-sm gap-2">';
+    for my $result (@{$search_response->{web}->{results}}[0..2]) {
+        $html .= '<div class="flex flex-col bg-zinc-700 hover:bg-zing-600 p-2 rounded w-[25%]">';
+        $html .= "<a href=\"$result->{url}\" class='bold underline mb-1'>$result->{title}</a>";
+        $html .= "<p class='text-xs max-h-4 overflow-hidden'>$result->{description}</p>";
+        $html .= '</div>';
+    }
+    $html .= '</div>';
+
+    # Display completion
+    my $chat_content = $dbh->selectrow_hashref('SELECT * FROM chat_content WHERE search_thread_id = ? AND is_completion = 1 ORDER BY created_at DESC LIMIT 1', undef, $search_id);
+
+    if ($chat_content) {
+        my $content = $chat_content->{content};
+        my $user = $chat_content->{user} // 'User';
+        my $content_html = markdown($content);
+        $html .= "<div class='fade-me-out fade-me-in completion'>";
+        $html .= "<p class='text-sm text-gray-500 bold'>$user</p>";
+        $html .= "<p class=''>$content_html</p>";
+        $html .= "</div>";
+    }
+
+    $html .= '</div>';
+    $html .= '</div>';
 
     $c->render(
         inline => layout($request_partial),
@@ -319,21 +367,6 @@ HTML
     );
 };
 
-
-
-# Delete a search thread
-post '/search/delete/:id' => sub {
-    my $c = shift;
-    my $id = $c->param('id');
-    $dbh->do('DELETE FROM search_threads WHERE id = ?', undef, $id);
-    # Re-render the list after deleting
-    $c->render(
-        inline => layout(1),
-        component => homepage(),
-        format  => 'html'
-    );
-  
-};
 
 
 # Render search result, sources, start text completion stream
@@ -426,6 +459,12 @@ get '/completion' => sub {
         $html .= "<p class='text-sm text-gray-500 bold'>$model</p>"; 
         $html .= "<p class=''>$content_html</p>"; 
         $html .= "</div>";
+
+        # Update chat_history with new completion
+        my $search_data_id = $dbh->selectrow_array('SELECT id FROM search_data WHERE search_thread_id = ? ORDER BY created_at DESC LIMIT 1', undef, $search_id);
+        my $sth = $dbh->prepare('INSERT INTO chat_content (search_thread_id, search_data_id, content, is_completion, user) VALUES (?, ?, ?, ?, ?)');
+        $sth->execute($search_id, $search_data_id, $content, 1, $model); #LLM model as user
+        push @{$chat_history}, { content => $content };
     }
 
     $c->render(

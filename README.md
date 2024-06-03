@@ -1,6 +1,6 @@
 ## Perl Plexity
 
-AI powered conversational search.
+RAG powered conversational search.
 
 Uses Groq (LLama3) and Brave Search
 
