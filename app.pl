@@ -191,7 +191,8 @@ sub homepage {
     my $html = qq{
         <div class="p-2 mx-auto max-w-2xl slide-content">
             <p class="text-3xl text-left mx-4 my-10 font-light">Talk to the internet</p>
-            <form id="query_form" hx-get="/search" hx-target="#content" hx-swap="innerHTML transition:true" hx-push-url="true" hx-trigger="" class="p-2 flex gap-2 mb-4 relative" method="post">
+            <form id="query_form" hx-get="/search" hx-target="#content" hx-swap="innerHTML transition:true" hx-push-url="true" 
+                    class="p-2 flex gap-2 mb-4 relative" method="post">
                 <textarea type="text" name="user_query" id="user_query" placeholder="Find answers..." class="bg-zinc-700 w-full p-2 pb-10 border-2 border-zinc-400 rounded" required></textarea>
                 <button type="submit" class="absolute bottom-0 right-0 mb-4 mr-4 rounded border p-1 px-2 hover:bg-black/10">
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4">
@@ -199,13 +200,8 @@ sub homepage {
                     </svg>
                 </button>
             </form>
-            <script>
-                document.querySelector('textarea[name="user_query"]').addEventListener("keydown", function(event) {
-                    if (event.key === "Enter" && !event.shiftKey) {
-                        event.preventDefault();
-                        this.form.requestSubmit();
-                    }
-                });
+            <script> // Textarea enter submit
+                    document.getElementById('user_query').addEventListener('keydown', e => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), e.target.closest('form').requestSubmit()));
             </script>
             <ul class="mx-2 p-0" style="list-style-type: none !important; padding-left: 0 !important;">
     };
