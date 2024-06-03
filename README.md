@@ -25,5 +25,10 @@ perl app.pl daemon
 #Web application available at http://127.0.0.1:3000
 ```
 
+### Screnshots
+
+![Screenshot](/screenshot.png)
+
+
 ### Database
 This project uses SQLite and creates a new app.db file in /data. To use another database, you must first install the db in your machine, then install the DBD driver, ie DBD::mysql, DBD::Pg
