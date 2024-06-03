@@ -27,6 +27,7 @@ perl app.pl daemon
 
 ### Screnshots
 
+![Screenshot](/screenshot-main.png)
 ![Screenshot](/screenshot.png)
 
 
