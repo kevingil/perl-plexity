@@ -14,7 +14,7 @@ sudo apt-get install zlib1g-dev
 sudo CPAN -f
 
 # Install dependencies
-sudo cpan Mojolicious DBD::SQLite JSON LWP::UserAgent LWP::Protocol::https Env
+sudo cpan Mojolicious DBD::SQLite JSON Mojo::UserAgent Text::Markdown LWP::Protocol::https Env
 ```
 
 Then run :)
